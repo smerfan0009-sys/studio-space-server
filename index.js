@@ -2,17 +2,19 @@ import express from "express";
 import cors from "cors";
 import "dotenv/config";
 import { ObjectId } from "mongodb";
-import { toNodeHandler } from "better-auth/node";
-import { fromNodeHeaders } from "better-auth/node";
+import { toNodeHandler, fromNodeHeaders } from "better-auth/node";
+
 import { auth } from "./auth.js";
 import { db, connectToMongoDB } from "./database.js";
 
 const app = express();
 const PORT = process.env.PORT || 7000;
 
-let studiosCollection;
+const studiosCollection = db.collection("studios");
 
-const client = new MongoClient(process.env.MONGODB_URI);
+// ------------------------------
+// CORS
+// ------------------------------
 
 app.use(
   cors({
@@ -20,51 +22,159 @@ app.use(
     credentials: true,
   }),
 );
+
+// ------------------------------
+// Better Auth
+// Keep this BEFORE express.json()
+// ------------------------------
+
 app.all("/api/auth/*splat", toNodeHandler(auth));
 
-app.use(express.json());
+// ------------------------------
+// Body parser
+// ------------------------------
 
-// MongoDB connection
-async function connectToMongoDB() {
-  await client.connect();
+app.use(express.json({ limit: "1mb" }));
 
-  console.log("Successfully connected to MongoDB!");
+// ------------------------------
+// Authentication helper
+// ------------------------------
 
-  const db = client.db("studio_space");
-  studiosCollection = db.collection("studios");
+async function getAuthenticatedUser(req) {
+  const session = await auth.api.getSession({
+    headers: fromNodeHeaders(req.headers),
+  });
+
+  return session?.user || null;
 }
 
+// ------------------------------
 // Home route
+// ------------------------------
+
 app.get("/", (req, res) => {
-  res.send({
+  res.json({
     success: true,
     message: "StudioSpace server is running fine!",
   });
 });
 
-// Get my studio listings
-// IMPORTANT: Authentication must be configured before returning private listings.
+// ------------------------------
+// Get all studios (public)
+// ------------------------------
+
+app.get("/api/studios", async (req, res) => {
+  try {
+    const studios = await studiosCollection
+      .find({})
+      .sort({ createdAt: -1 })
+      .toArray();
+
+    res.status(200).json({
+      success: true,
+      studios,
+    });
+  } catch (error) {
+    console.error("Fetch studios error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Failed to load studios.",
+    });
+  }
+});
+
+// ------------------------------
+// Get single studio (public)
+// ------------------------------
+
+app.get("/api/studios/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid studio ID.",
+      });
+    }
+
+    const studio = await studiosCollection.findOne({
+      _id: new ObjectId(id),
+    });
+
+    if (!studio) {
+      return res.status(404).json({
+        success: false,
+        message: "Studio not found.",
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      studio,
+    });
+  } catch (error) {
+    console.error("Fetch studio error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Failed to load studio details.",
+    });
+  }
+});
+
+// ------------------------------
+// Get my listings (private)
+// ------------------------------
+
 app.get("/api/my-listings", async (req, res) => {
   try {
-    // JWT authentication is not configured yet.
-    // Do not return every user's studio as a workaround.
-    return res.status(401).json({
-      success: false,
-      message: "Please log in to view your studio listings.",
+    const user = await getAuthenticatedUser(req);
+
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: "Please log in to view your studio listings.",
+      });
+    }
+
+    const studios = await studiosCollection
+      .find({
+        $or: [{ ownerId: user.id }, { ownerEmail: user.email }],
+      })
+      .sort({ createdAt: -1 })
+      .toArray();
+
+    res.status(200).json({
+      success: true,
+      studios,
     });
   } catch (error) {
     console.error("Fetch listings error:", error);
 
-    return res.status(500).json({
+    res.status(500).json({
       success: false,
       message: "Failed to load studio listings.",
     });
   }
 });
 
-// Create a new studio
+// ------------------------------
+// Create studio (private)
+// ------------------------------
+
 app.post("/api/studios", async (req, res) => {
   try {
+    const user = await getAuthenticatedUser(req);
+
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: "Please log in to create a studio.",
+      });
+    }
+
     const {
       title,
       category,
@@ -78,14 +188,19 @@ app.post("/api/studios", async (req, res) => {
     } = req.body;
 
     if (
-      !title ||
-      !category ||
+      typeof title !== "string" ||
+      !title.trim() ||
+      typeof category !== "string" ||
+      !category.trim() ||
       hourlyRate === undefined ||
       securityDeposit === undefined ||
       capacity === undefined ||
-      !location ||
-      !imageUrl ||
-      !overview
+      typeof location !== "string" ||
+      !location.trim() ||
+      typeof imageUrl !== "string" ||
+      !imageUrl.trim() ||
+      typeof overview !== "string" ||
+      !overview.trim()
     ) {
       return res.status(400).json({
         success: false,
@@ -111,17 +226,25 @@ app.post("/api/studios", async (req, res) => {
       });
     }
 
-    if (
-      typeof imageUrl !== "string" ||
-      !/^https?:\/\/\S+$/i.test(imageUrl.trim())
-    ) {
+    let parsedImageUrl;
+
+    try {
+      parsedImageUrl = new URL(imageUrl.trim());
+    } catch {
       return res.status(400).json({
         success: false,
         message: "Please provide a valid image URL.",
       });
     }
 
-    if (typeof overview !== "string" || overview.trim().length < 30) {
+    if (!["http:", "https:"].includes(parsedImageUrl.protocol)) {
+      return res.status(400).json({
+        success: false,
+        message: "Image URL must use HTTP or HTTPS.",
+      });
+    }
+
+    if (overview.trim().length < 30) {
       return res.status(400).json({
         success: false,
         message: "Studio overview must contain at least 30 characters.",
@@ -130,18 +253,19 @@ app.post("/api/studios", async (req, res) => {
 
     const newStudio = {
       title: title.trim(),
-      category,
+      category: category.trim(),
       hourlyRate: rate,
       securityDeposit: deposit,
       capacity: maxCapacity,
       location: location.trim(),
-      imageUrl: imageUrl.trim(),
+      imageUrl: parsedImageUrl.toString(),
       amenities: Array.isArray(amenities) ? amenities : [],
       overview: overview.trim(),
 
-      // These will be populated from the verified user session.
-      ownerName: null,
-      ownerEmail: null,
+      // Always use verified user information.
+      ownerId: user.id,
+      ownerName: user.name || "",
+      ownerEmail: user.email,
 
       rating: 0,
       createdAt: new Date(),
@@ -150,7 +274,7 @@ app.post("/api/studios", async (req, res) => {
 
     const result = await studiosCollection.insertOne(newStudio);
 
-    return res.status(201).json({
+    res.status(201).json({
       success: true,
       message: "Studio created successfully!",
       insertedId: result.insertedId,
@@ -158,28 +282,70 @@ app.post("/api/studios", async (req, res) => {
   } catch (error) {
     console.error("Create studio error:", error);
 
-    return res.status(500).json({
+    res.status(500).json({
       success: false,
       message: "Failed to create studio.",
     });
   }
 });
 
-// Delete studio
-// This route will be implemented with verified owner authentication.
+// ------------------------------
+// Delete studio (owner only)
+// ------------------------------
+
 app.delete("/api/studios/:id", async (req, res) => {
-  return res.status(401).json({
-    success: false,
-    message: "Please log in to delete a studio.",
-  });
+  try {
+    const user = await getAuthenticatedUser(req);
+
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: "Please log in to delete a studio.",
+      });
+    }
+
+    const { id } = req.params;
+
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid studio ID.",
+      });
+    }
+
+    const result = await studiosCollection.deleteOne({
+      _id: new ObjectId(id),
+      $or: [{ ownerId: user.id }, { ownerEmail: user.email }],
+    });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Studio not found or you are not the owner.",
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Studio deleted successfully!",
+    });
+  } catch (error) {
+    console.error("Delete studio error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Failed to delete studio.",
+    });
+  }
 });
 
-// Start server after MongoDB connection
+// ------------------------------
+// Start server
+// ------------------------------
+
 async function startServer() {
   try {
     await connectToMongoDB();
-
-    studiosCollection = db.collection("studios");
 
     app.listen(PORT, () => {
       console.log(`StudioSpace server is running at http://localhost:${PORT}`);
@@ -191,19 +357,5 @@ async function startServer() {
 }
 
 startServer();
-
-// middlewares
-
-app.use(
-  cors({
-    origin: process.env.CLIENT_URL || "http://localhost:3000",
-    credentials: true,
-  }),
-);
-
-// Better Auth route must come before express.json()
-app.all("/api/auth/*splat", toNodeHandler(auth));
-
-app.use(express.json());
 
 export default app;
