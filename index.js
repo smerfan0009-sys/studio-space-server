@@ -12,10 +12,6 @@ const PORT = process.env.PORT || 7000;
 
 const studiosCollection = db.collection("studios");
 
-// ------------------------------
-// CORS
-// ------------------------------
-
 app.use(
   cors({
     origin: process.env.CLIENT_URL || "http://localhost:3000",
@@ -23,22 +19,9 @@ app.use(
   }),
 );
 
-// ------------------------------
-// Better Auth
-// Keep this BEFORE express.json()
-// ------------------------------
-
 app.all("/api/auth/*splat", toNodeHandler(auth));
 
-// ------------------------------
-// Body parser
-// ------------------------------
-
 app.use(express.json({ limit: "1mb" }));
-
-// ------------------------------
-// Authentication helper
-// ------------------------------
 
 async function getAuthenticatedUser(req) {
   const session = await auth.api.getSession({
@@ -48,20 +31,12 @@ async function getAuthenticatedUser(req) {
   return session?.user || null;
 }
 
-// ------------------------------
-// Home route
-// ------------------------------
-
 app.get("/", (req, res) => {
   res.json({
     success: true,
     message: "StudioSpace server is running fine!",
   });
 });
-
-// ------------------------------
-// Get all studios (public)
-// ------------------------------
 
 app.get("/api/studios", async (req, res) => {
   try {
@@ -83,10 +58,6 @@ app.get("/api/studios", async (req, res) => {
     });
   }
 });
-
-// ------------------------------
-// Get single studio (public)
-// ------------------------------
 
 app.get("/api/studios/:id", async (req, res) => {
   try {
@@ -124,10 +95,6 @@ app.get("/api/studios/:id", async (req, res) => {
   }
 });
 
-// ------------------------------
-// Get my listings (private)
-// ------------------------------
-
 app.get("/api/my-listings", async (req, res) => {
   try {
     const user = await getAuthenticatedUser(req);
@@ -159,10 +126,6 @@ app.get("/api/my-listings", async (req, res) => {
     });
   }
 });
-
-// ------------------------------
-// Create studio (private)
-// ------------------------------
 
 app.post("/api/studios", async (req, res) => {
   try {
@@ -262,7 +225,6 @@ app.post("/api/studios", async (req, res) => {
       amenities: Array.isArray(amenities) ? amenities : [],
       overview: overview.trim(),
 
-      // Always use verified user information.
       ownerId: user.id,
       ownerName: user.name || "",
       ownerEmail: user.email,
@@ -288,10 +250,6 @@ app.post("/api/studios", async (req, res) => {
     });
   }
 });
-
-// ------------------------------
-// Delete studio (owner only)
-// ------------------------------
 
 app.delete("/api/studios/:id", async (req, res) => {
   try {
@@ -338,10 +296,6 @@ app.delete("/api/studios/:id", async (req, res) => {
     });
   }
 });
-
-// ------------------------------
-// Start server
-// ------------------------------
 
 async function startServer() {
   try {
