@@ -1,11 +1,16 @@
-
 import express from "express";
 import cors from "cors";
 import "dotenv/config";
-import { MongoClient } from "mongodb";
+import { ObjectId } from "mongodb";
+import { toNodeHandler } from "better-auth/node";
+import { fromNodeHeaders } from "better-auth/node";
+import { auth } from "./auth.js";
+import { db, connectToMongoDB } from "./database.js";
 
 const app = express();
 const PORT = process.env.PORT || 7000;
+
+let studiosCollection;
 
 const client = new MongoClient(process.env.MONGODB_URI);
 
@@ -13,12 +18,11 @@ app.use(
   cors({
     origin: process.env.CLIENT_URL || "http://localhost:3000",
     credentials: true,
-  })
+  }),
 );
+app.all("/api/auth/*splat", toNodeHandler(auth));
 
 app.use(express.json());
-
-let studiosCollection;
 
 // MongoDB connection
 async function connectToMongoDB() {
@@ -117,10 +121,7 @@ app.post("/api/studios", async (req, res) => {
       });
     }
 
-    if (
-      typeof overview !== "string" ||
-      overview.trim().length < 30
-    ) {
+    if (typeof overview !== "string" || overview.trim().length < 30) {
       return res.status(400).json({
         success: false,
         message: "Studio overview must contain at least 30 characters.",
@@ -178,6 +179,8 @@ async function startServer() {
   try {
     await connectToMongoDB();
 
+    studiosCollection = db.collection("studios");
+
     app.listen(PORT, () => {
       console.log(`StudioSpace server is running at http://localhost:${PORT}`);
     });
@@ -188,5 +191,19 @@ async function startServer() {
 }
 
 startServer();
+
+// middlewares
+
+app.use(
+  cors({
+    origin: process.env.CLIENT_URL || "http://localhost:3000",
+    credentials: true,
+  }),
+);
+
+// Better Auth route must come before express.json()
+app.all("/api/auth/*splat", toNodeHandler(auth));
+
+app.use(express.json());
 
 export default app;
