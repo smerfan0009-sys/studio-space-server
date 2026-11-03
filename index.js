@@ -14,6 +14,7 @@ const PORT = process.env.PORT || 7000;
 const studiosCollection = db.collection("studios");
 const bookingsCollection = db.collection("bookings");
 const reviewsCollection = db.collection("reviews");
+const newsletterCollection = db.collection("newsletter");
 
 // --------------------------------------------------
 // CONFIGURATION
@@ -106,6 +107,45 @@ app.get("/", (req, res) => {
     success: true,
     message: "StudioSpace server is running fine!",
   });
+});
+
+// POST: Subscribe to the newsletter
+app.post("/api/newsletter", async (req, res) => {
+  try {
+    const email = String(req.body?.email || "")
+      .trim()
+      .toLowerCase();
+
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+      return res.status(400).json({
+        success: false,
+        message: "Please provide a valid email address.",
+      });
+    }
+
+    await newsletterCollection.updateOne(
+      { email },
+      {
+        $setOnInsert: {
+          email,
+          createdAt: new Date(),
+        },
+      },
+      { upsert: true },
+    );
+
+    return res.status(201).json({
+      success: true,
+      message: "You are subscribed. Watch your inbox for studio inspiration!",
+    });
+  } catch (error) {
+    console.error("Newsletter subscription error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to subscribe. Please try again.",
+    });
+  }
 });
 
 // --------------------------------------------------
