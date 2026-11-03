@@ -9,7 +9,10 @@ export const auth = betterAuth({
   baseURL: process.env.BETTER_AUTH_URL,
   secret: process.env.BETTER_AUTH_SECRET,
 
-  trustedOrigins: [process.env.CLIENT_URL],
+  trustedOrigins: [
+    process.env.CLIENT_URL,
+    "https://studio-space-nine.vercel.app",
+  ],
 
   emailAndPassword: {
     enabled: true,
