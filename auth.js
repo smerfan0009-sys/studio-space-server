@@ -6,11 +6,12 @@ import { db } from "./database.js";
 export const auth = betterAuth({
   database: mongodbAdapter(db),
 
-  baseURL: process.env.BETTER_AUTH_URL,
+  baseURL:
+    process.env.BETTER_AUTH_URL || "https://studio-space-nine.vercel.app",
   secret: process.env.BETTER_AUTH_SECRET,
 
   trustedOrigins: [
-    process.env.CLIENT_URL,
+    process.env.CLIENT_URL || "https://studio-space-nine.vercel.app",
     "https://studio-space-nine.vercel.app",
   ],
 
