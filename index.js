@@ -9,7 +9,7 @@ import { auth } from "./auth.js";
 import { db, connectToMongoDB } from "./database.js";
 
 const app = express();
-app.set("trust proxy", 1)
+app.set("trust proxy", 1);
 const PORT = process.env.PORT || 7000;
 
 const studiosCollection = db.collection("studios");
