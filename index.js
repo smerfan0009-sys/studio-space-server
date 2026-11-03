@@ -17,6 +17,51 @@ const reviewsCollection = db.collection("reviews");
 const newsletterCollection = db.collection("newsletter");
 
 // --------------------------------------------------
+// DATABASE INITIALIZATION
+// --------------------------------------------------
+
+let initializationPromise = null;
+
+async function initializeServer() {
+  await connectToMongoDB();
+
+  await reviewsCollection.createIndex({ bookingId: 1 }, { unique: true });
+
+  await reviewsCollection.createIndex({
+    studioId: 1,
+    createdAt: -1,
+  });
+
+  await bookingsCollection.createIndex({
+    studioId: 1,
+    status: 1,
+    startTime: 1,
+    endTime: 1,
+  });
+}
+
+async function ensureServerInitialized(req, res, next) {
+  try {
+    if (!initializationPromise) {
+      initializationPromise = initializeServer().catch((error) => {
+        initializationPromise = null;
+        throw error;
+      });
+    }
+
+    await initializationPromise;
+    next();
+  } catch (error) {
+    console.error("Server initialization error:", error);
+
+    return res.status(503).json({
+      success: false,
+      message: "Server is temporarily unavailable. Please try again.",
+    });
+  }
+}
+
+// --------------------------------------------------
 // CONFIGURATION
 // --------------------------------------------------
 
@@ -41,7 +86,12 @@ app.use(
   }),
 );
 
+// IMPORTANT: Initialization must run before every API route.
+app.use(ensureServerInitialized);
+
+// Keep Better Auth before express.json().
 app.all("/api/auth/*splat", toNodeHandler(auth));
+
 app.use(express.json({ limit: "1mb" }));
 
 // --------------------------------------------------
@@ -109,7 +159,10 @@ app.get("/", (req, res) => {
   });
 });
 
-// POST: Subscribe to the newsletter
+// --------------------------------------------------
+// NEWSLETTER
+// --------------------------------------------------
+
 app.post("/api/newsletter", async (req, res) => {
   try {
     const email = String(req.body?.email || "")
@@ -482,7 +535,6 @@ app.post("/api/bookings", async (req, res) => {
 
     const studioObjectId = new ObjectId(studioId);
 
-    // Deleted studios cannot receive new bookings.
     const studio = await studiosCollection.findOne({
       _id: studioObjectId,
       isDeleted: { $ne: true },
@@ -510,7 +562,6 @@ app.post("/api/bookings", async (req, res) => {
 
     const totalAmount = Math.round(hourlyRate * durationInHours * 100) / 100;
 
-    // Confirmed bookings block overlapping requests.
     const conflictingBooking = await bookingsCollection.findOne({
       studioId: { $in: [studioObjectId, studioObjectId.toString()] },
       status: /^confirmed$/i,
@@ -532,13 +583,10 @@ app.post("/api/bookings", async (req, res) => {
       userId: user.id,
       userEmail: user.email,
       userName: user.name || "",
-
-      // Keep a snapshot for booking history.
       studioTitle: studio.title,
       studioImage: studio.imageUrl || "",
       category: studio.category || "",
       location: studio.location || "",
-
       startTime: start,
       endTime: end,
       hourlyRate,
@@ -613,8 +661,6 @@ app.get("/api/my-bookings", async (req, res) => {
       const studio = studioMap.get(String(booking.studioId));
       const studioUnavailable = !studio || studio.isDeleted === true;
 
-      // Prefer the live studio details when available.
-      // Otherwise retain the booking-time snapshot.
       const studioTitle = studioUnavailable
         ? booking.studioTitle || "Studio Unavailable"
         : studio.title || booking.studioTitle || "Studio";
@@ -629,13 +675,10 @@ app.get("/api/my-bookings", async (req, res) => {
 
       return {
         ...serializeBooking(booking),
-
         studioUnavailable,
-
         studioTitle,
         studioImageUrl,
         studioLocation,
-
         studio: {
           _id: booking.studioId ? String(booking.studioId) : "",
           title: studioTitle,
@@ -663,7 +706,6 @@ app.get("/api/my-bookings", async (req, res) => {
 
 // --------------------------------------------------
 // GET HOST'S BOOKING REQUESTS
-// Includes history for soft-deleted studios.
 // --------------------------------------------------
 
 app.get("/api/host-bookings", async (req, res) => {
@@ -677,8 +719,6 @@ app.get("/api/host-bookings", async (req, res) => {
       });
     }
 
-    // Do not filter deleted studios here:
-    // hosts should retain access to their booking history.
     const ownedStudios = await studiosCollection
       .find({
         $or: [{ ownerId: user.id }, { ownerEmail: user.email }],
@@ -698,9 +738,7 @@ app.get("/api/host-bookings", async (req, res) => {
 
     const bookings = await bookingsCollection
       .find({
-        studioId: {
-          $in: studioIds,
-        },
+        studioId: { $in: studioIds },
       })
       .sort({ createdAt: -1 })
       .toArray();
@@ -1090,7 +1128,6 @@ app.patch("/api/bookings/:id/cancel", async (req, res) => {
 
 // --------------------------------------------------
 // CUSTOMER SUBMITS REVIEW
-// Confirmed bookings can be reviewed, as requested.
 // --------------------------------------------------
 
 app.post("/api/reviews", async (req, res) => {
@@ -1159,8 +1196,6 @@ app.post("/api/reviews", async (req, res) => {
       });
     }
 
-    // Allow reviews for an existing soft-deleted studio:
-    // the customer may still have a valid confirmed booking.
     const studio = await studiosCollection.findOne({
       _id: studioId,
     });
@@ -1578,37 +1613,14 @@ app.delete("/api/studios/:id", async (req, res) => {
 });
 
 // --------------------------------------------------
-// START SERVER AND CREATE INDEXES
+// LOCAL SERVER STARTUP
 // --------------------------------------------------
 
-async function startServer() {
-  try {
-    await connectToMongoDB();
-
-    // One review per booking.
-    await reviewsCollection.createIndex({ bookingId: 1 }, { unique: true });
-
-    await reviewsCollection.createIndex({
-      studioId: 1,
-      createdAt: -1,
-    });
-
-    await bookingsCollection.createIndex({
-      studioId: 1,
-      status: 1,
-      startTime: 1,
-      endTime: 1,
-    });
-
-    app.listen(PORT, () => {
-      console.log(`StudioSpace server is running at http://localhost:${PORT}`);
-    });
-  } catch (error) {
-    console.error("Failed to start server:", error);
-    process.exit(1);
-  }
+// Only start a listening server during local development.
+if (process.env.VERCEL !== "1") {
+  app.listen(PORT, () => {
+    console.log(`StudioSpace server is running at http://localhost:${PORT}`);
+  });
 }
-
-startServer();
 
 export default app;
