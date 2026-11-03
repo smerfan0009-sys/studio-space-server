@@ -8,13 +8,13 @@ import { auth } from "./auth.js";
 import { db, connectToMongoDB } from "./database.js";
 
 const app = express();
-const PORT = process.env.PORT || 7000;
+const PORT = process.env.PORT;
 
 const studiosCollection = db.collection("studios");
 
 app.use(
   cors({
-    origin: process.env.CLIENT_URL || "http://localhost:3000",
+    origin: process.env.CLIENT_URL,
     credentials: true,
   }),
 );
